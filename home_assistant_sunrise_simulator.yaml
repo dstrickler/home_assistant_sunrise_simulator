@@ -1,6 +1,6 @@
 blueprint:
   name: Sunrise Light Simulator (Loop w/ Kevin setting)
-  description: Gradually brighten lights and change color to simulate a sunrise over a specified duration using a loop-based approach. Specify by Light entity, Area, or Label.
+  description: Gradually brighten lights and change color to simulate a sunrise over a specified duration using a loop-based approach. Specify by Light entity, Area, or Label. Based on code from https://community.home-assistant.io/t/sunrise-light-simulator/943155/8
   domain: automation
   input:
     target_lights:
