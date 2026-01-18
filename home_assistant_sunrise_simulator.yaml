@@ -1,0 +1,173 @@
+blueprint:
+  name: Sunrise Light Simulator with looping & Kevin setting
+  description: Gradually brighten lights and change color to simulate a sunrise over a specified duration using a loop-based approach. Stops automatically if lights are manually changed. Specify by Light entity, Area, or Label. Based on the work https://community.home-assistant.io/t/sunrise-light-simulator/943155
+  domain: automation
+  input:
+    target_lights:
+      name: Lights
+      description: Select lights by entity, area, device, or label for the sunrise simulation
+      selector:
+        target: {}
+    monitor_entities:
+      name: Monitor Entities (Optional - for manual change detection)
+      description: Select the specific light entities to monitor for manual changes. If any of these lights are manually changed, the automation will stop. Leave empty to disable this feature.
+      default: []
+      selector:
+        entity:
+          multiple: true
+          domain: light
+    start_time:
+      name: Start Time
+      description: Time to start the sunrise simulation
+      selector:
+        time: {}
+    duration:
+      name: Duration (minutes)
+      description: How long the sunrise should last (in minutes)
+      default: 45
+      selector:
+        number:
+          min: 3
+          max: 120
+          step: 1
+          unit_of_measurement: minutes
+    max_brightness:
+      name: Maximum Brightness
+      description: The maximum brightness level to reach at the end of the sunrise
+      default: 100
+      selector:
+        number:
+          min: 1
+          max: 100
+          step: 1
+          unit_of_measurement: "%"
+    start_kelvin:
+      name: Start Kelvin Temperature
+      description: The starting color temperature in Kelvin (warm)
+      default: 2000
+      selector:
+        number:
+          min: 2000
+          max: 5000
+          step: 200
+          unit_of_measurement: "K"
+    stop_kelvin:
+      name: Stop Kelvin Temperature
+      description: The ending color temperature in Kelvin (cool). Must be at least 1000K higher than start.
+      default: 3000
+      selector:
+        number:
+          min: 2000
+          max: 5000
+          step: 200
+          unit_of_measurement: "K"
+    pre_sunrise_actions:
+      name: Pre-Sunrise Actions (Optional)
+      description: Actions to run before the sunrise simulation starts
+      default: []
+      selector:
+        action: {}
+    post_sunrise_actions:
+      name: Post-Sunrise Actions (Optional)
+      description: Actions to run after the sunrise simulation completes
+      default: []
+      selector:
+        action: {}
+
+trigger:
+  - platform: time
+    at: !input start_time
+
+condition:
+  - condition: template
+    value_template: "{{ (stop_kelvin - start_kelvin) >= 1000 }}"
+    alias: "Validate: Stop Kelvin must be at least 1000K higher than Start Kelvin"
+
+variables:
+  duration: !input duration
+  max_brightness: !input max_brightness
+  start_kelvin: !input start_kelvin
+  stop_kelvin: !input stop_kelvin
+  monitor_entities: !input monitor_entities
+  # Calculate increments per minute
+  brightness_increment: "{{ max_brightness / duration }}"
+  # Kelvin range based on user settings
+  kelvin_range: "{{ stop_kelvin - start_kelvin }}"
+  kelvin_increment: "{{ kelvin_range / duration }}"
+
+action:
+  # Run pre-sunrise actions
+  - choose: []
+    default: !input pre_sunrise_actions
+
+  # Wait a moment for the pre_sunrise_actions to take effect                                                              
+  #- delay:                                                                                                            
+  #    seconds: 1
+
+  # Initialize lights at minimum settings
+  - service: light.turn_on
+    target: !input target_lights
+    data:
+      brightness_pct: 1
+      kelvin: "{{ start_kelvin }}"
+
+  # Wait a moment for the initial setting to take effect
+  - delay:
+      seconds: 2
+
+  # Loop through each minute of the duration
+  - repeat:
+      count: "{{ duration }}"
+      sequence:
+        # Calculate current brightness and kelvin for this iteration
+        - variables:
+            current_minute: "{{ repeat.index }}"
+            target_brightness: "{{ [(brightness_increment * current_minute) | int, max_brightness] | min }}"
+            target_kelvin: "{{ [(start_kelvin + (kelvin_increment * current_minute)) | int, stop_kelvin] | min }}"
+
+        # Set the light to the calculated values with a 60-second transition
+        - service: light.turn_on
+          target: !input target_lights
+          data:
+            brightness_pct: "{{ target_brightness }}"
+            kelvin: "{{ target_kelvin }}"
+            transition: 60
+
+        # Wait 1 minute before the next iteration, or stop if lights are manually changed
+        - choose:
+            - conditions:
+                - condition: template
+                  value_template: "{{ monitor_entities | length > 0 }}"
+              sequence:
+                - wait_for_trigger:
+                    - platform: state
+                      entity_id: !input monitor_entities
+                  timeout:
+                    minutes: 1
+                  continue_on_timeout: true
+                - if:
+                    - condition: template
+                      value_template: "{{ wait.trigger is not none }}"
+                  then:
+                    - service: logbook.log
+                      data:
+                        name: "Sunrise Simulator"
+                        message: "Sunrise simulation stopped due to manual light change at minute {{ current_minute }} of {{ duration }}"
+                        entity_id: !input target_lights
+                    - stop: "Manual light change detected"
+          default:
+            - delay:
+                minutes: 1
+
+  # Run post-sunrise actions
+  - choose: []
+    default: !input post_sunrise_actions
+
+  # Log completion to Home Assistant Activity log
+  - service: logbook.log
+    data:
+      name: "Sunrise Simulator"
+      message: "Sunrise simulation completed. Duration: {{ duration }} minutes, Final brightness: {{ max_brightness }}%, Final temperature: {{ stop_kelvin }}K"
+      entity_id: !input target_lights
+
+mode: single
